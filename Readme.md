@@ -41,3 +41,5 @@ The server writes data under `data/`:
 - Event markers are app-side synchronized markers. They are not written into the Polar H10 device.
 - Polar ground-truth heartbeat counts are computed by integrating the 1 Hz Polar HR samples over each trial window.
 - Dynamic baseline/recovery agreement metrics include MAE, RMSE, mean bias, MAPE, Pearson correlation, Lin's CCC, and Bland-Altman limits of agreement.
+
+See [Methodology.md](Methodology.md) for the full validation workflow and analysis methodology.

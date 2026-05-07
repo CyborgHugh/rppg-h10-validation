@@ -44,8 +44,8 @@ export function summarizeSession(session) {
 function summarizeTrial(trial, events, polarSamples) {
   const startEvent = findTrialEvent(events, 'trial_start', trial.trialId);
   const endEvent = findTrialEvent(events, 'trial_end', trial.trialId);
-  const startMs = Number.isFinite(trial.startPerfMs) ? trial.startPerfMs : startEvent?.perfMs;
-  const endMs = Number.isFinite(trial.endPerfMs) ? trial.endPerfMs : endEvent?.perfMs;
+  const startMs = Number.isFinite(startEvent?.perfMs) ? startEvent.perfMs : trial.startPerfMs;
+  const endMs = Number.isFinite(endEvent?.perfMs) ? endEvent.perfMs : trial.endPerfMs;
   const durationSec = trial.durationSec ?? ((endMs - startMs) / 1000);
   const polarBeats = Number.isFinite(startMs) && Number.isFinite(endMs)
     ? integratePolarBeats(polarSamples, startMs, endMs)

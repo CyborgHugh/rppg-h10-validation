@@ -37,3 +37,31 @@ const row = flattenParticipantSummary(summary);
 assert.equal(row.session_id, 's1');
 assert.equal(row.participant_id, 'p1');
 assert.ok(row.trial_metrics_json.includes('baseline-1'));
+
+const delayedSubmission = summarizeSession({
+  ...session,
+  polarSamples: [
+    { perfMs: 0, hrBpm: 60 },
+    { perfMs: 1000, hrBpm: 60 },
+    { perfMs: 2000, hrBpm: 60 },
+    { perfMs: 3000, hrBpm: 60 },
+    { perfMs: 4000, hrBpm: 60 },
+    { perfMs: 5000, hrBpm: 60 }
+  ],
+  trials: [
+    {
+      trialId: 'baseline-1',
+      phase: 'BASELINE',
+      trialNumber: 1,
+      durationSec: 3,
+      startPerfMs: 0,
+      endPerfMs: 5000,
+      subjectiveBeats: 3,
+      cwtBeats: 3,
+      lsBeats: 3
+    }
+  ]
+});
+
+assert.equal(delayedSubmission.trialSummaries[0].endPerfMs, 3000);
+assert.equal(delayedSubmission.trialSummaries[0].polarBeats, 3);
