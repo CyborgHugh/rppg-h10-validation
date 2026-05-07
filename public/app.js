@@ -160,10 +160,16 @@ const pipeline = new RPPGPipeline({
       if (!state.events.some((event) => event.eventType === 'rppg_signal_lock')) {
         logEvent('rppg_signal_lock', { cwtBpm: pipeline.cwtBpm, lsBpm: pipeline.lsBpm });
       }
+    } else if (state.currentPhase === 'PRE_RECOVERY') {
+      dom.signalStatus.textContent = `${t('locked')} ${pipeline.cwtBpm.toFixed(0)} BPM`;
+      dom.signalStatus.className = 'status ok';
+      if (!state.events.some((event) => event.eventType === 'pre_recovery_rppg_signal_lock')) {
+        logEvent('pre_recovery_rppg_signal_lock', { cwtBpm: pipeline.cwtBpm, lsBpm: pipeline.lsBpm });
+      }
     }
   },
   onHr: (sample) => {
-    if (['BASELINE', 'RECOVERY'].includes(state.currentPhase) && sample.t - state.lastRppgSamplePerfMs >= 1000) {
+    if (shouldStoreRppgSample(state.currentPhase) && sample.t - state.lastRppgSamplePerfMs >= 1000) {
       state.lastRppgSamplePerfMs = sample.t;
       state.rppgSamples.push({
         wallTime: new Date().toISOString(),
@@ -316,6 +322,10 @@ function shouldFeedRppg(phase) {
     'PRE_RECOVERY',
     'RECOVERY'
   ].includes(phase);
+}
+
+function shouldStoreRppgSample(phase) {
+  return ['BASELINE', 'PRE_RECOVERY', 'RECOVERY'].includes(phase);
 }
 
 function extractFaceRoi(results) {
@@ -495,6 +505,7 @@ function runCooldown() {
 
 function runPreRecovery() {
   pipeline.reset();
+  state.lastRppgSamplePerfMs = 0;
   setPhase('PRE_RECOVERY', t('preRecovery'), t('preRecoveryInstructions'));
   logEvent('pre_recovery_start');
   playTone(1000, 0.4, 'square', 0.2);

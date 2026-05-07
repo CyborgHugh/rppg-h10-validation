@@ -83,7 +83,20 @@ function phaseWindow(phase, events, trialSummaries) {
   const starts = phaseTrials.map((trial) => trial.startPerfMs).filter(Number.isFinite);
   const ends = phaseTrials.map((trial) => trial.endPerfMs).filter(Number.isFinite);
   if (!starts.length || !ends.length) return null;
-  return { startMs: Math.min(...starts), endMs: Math.max(...ends) };
+  const startMs = phase === 'RECOVERY'
+    ? recoveryWindowStart(events, Math.min(...starts))
+    : Math.min(...starts);
+  return { startMs, endMs: Math.max(...ends) };
+}
+
+function recoveryWindowStart(events, firstRecoveryTrialStartMs) {
+  const lock = [...events]
+    .reverse()
+    .find((event) => event.eventType === 'pre_recovery_rppg_signal_lock' && Number.isFinite(event.perfMs));
+  const preRecoveryStart = [...events]
+    .reverse()
+    .find((event) => event.eventType === 'pre_recovery_start' && Number.isFinite(event.perfMs));
+  return lock?.perfMs ?? preRecoveryStart?.perfMs ?? firstRecoveryTrialStartMs;
 }
 
 export function flattenParticipantSummary(summary) {

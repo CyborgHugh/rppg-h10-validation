@@ -65,3 +65,28 @@ const delayedSubmission = summarizeSession({
 
 assert.equal(delayedSubmission.trialSummaries[0].endPerfMs, 3000);
 assert.equal(delayedSubmission.trialSummaries[0].polarBeats, 3);
+
+const recoveryWithPreBuffer = summarizeSession({
+  ...session,
+  polarSamples: [
+    { perfMs: 9000, hrBpm: 90 },
+    { perfMs: 10000, hrBpm: 91 },
+    { perfMs: 11000, hrBpm: 92 },
+    { perfMs: 12000, hrBpm: 93 }
+  ],
+  rppgSamples: [
+    { perfMs: 9000, phase: 'PRE_RECOVERY', cwtBpm: 89, lsBpm: 90 },
+    { perfMs: 10000, phase: 'RECOVERY', cwtBpm: 91, lsBpm: 91 },
+    { perfMs: 11000, phase: 'RECOVERY', cwtBpm: 92, lsBpm: 92 }
+  ],
+  events: [
+    { perfMs: 9000, eventType: 'pre_recovery_rppg_signal_lock', phase: 'PRE_RECOVERY' },
+    { perfMs: 10000, eventType: 'trial_start', phase: 'RECOVERY', trialId: 'recovery-1' },
+    { perfMs: 12000, eventType: 'trial_end', phase: 'RECOVERY', trialId: 'recovery-1' }
+  ],
+  trials: [
+    { trialId: 'recovery-1', phase: 'RECOVERY', trialNumber: 1, durationSec: 2, subjectiveBeats: 3, cwtBeats: 3, lsBeats: 3 }
+  ]
+});
+
+assert.equal(recoveryWithPreBuffer.phaseAgreement.RECOVERY.cwt.nSeconds, 3);

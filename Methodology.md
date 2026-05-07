@@ -31,7 +31,7 @@ The server stores all output under `data/`, which is ignored by git.
 Per session:
 
 - `polar_hr_1hz.csv`: Polar HR samples with `sessionId`, `participantId`, wall-clock time, `performance.now()` time, BPM, and RR intervals as JSON.
-- `rppg_hr_1hz.csv`: rPPG CWT/LS dynamic HR estimates with timestamps and phase labels.
+- `rppg_hr_1hz.csv`: rPPG CWT/LS dynamic HR estimates with timestamps and phase labels. Recovery-related rows can include the pre-recovery buffering period.
 - `events.csv`: synchronized app-side event markers.
 - `trial_summary.csv`: trial-level subjective beats, Polar beats, CWT beats, LS beats, and deviation metrics.
 - `session.json`: complete raw session payload and computed summary.
@@ -66,7 +66,7 @@ The Polar-derived heartbeat count is the ground-truth denominator for percent-ba
 
 ## Dynamic HR Agreement Methodology
 
-The app stores dynamic rPPG HR estimates approximately once per second during baseline and recovery. For each phase, Polar and rPPG estimates are aligned by nearest second within the phase window.
+The app stores dynamic rPPG HR estimates approximately once per second during baseline and recovery. For recovery, it also stores estimates during the pre-recovery buffering period after the pipeline reset. For each phase, Polar and rPPG estimates are aligned by nearest second within the phase window. The recovery agreement window begins at the pre-recovery rPPG signal-lock marker when available, allowing the first recovery trial to use the warmed buffer instead of behaving like a cold start.
 
 For each algorithm and phase, the app computes:
 
