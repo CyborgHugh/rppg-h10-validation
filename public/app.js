@@ -295,7 +295,7 @@ function onResults(results) {
   if (canvas.width === 0) return;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
-  if (!['CALIBRATION', 'BASELINE', 'PRE_RECOVERY', 'RECOVERY'].includes(state.currentPhase)) return;
+  if (!shouldFeedRppg(state.currentPhase)) return;
 
   const roi = extractFaceRoi(results);
   if (roi) {
@@ -305,6 +305,17 @@ function onResults(results) {
   } else {
     handleFaceLoss();
   }
+}
+
+function shouldFeedRppg(phase) {
+  return [
+    'CALIBRATION',
+    'BASELINE_READY',
+    'PRACTICE',
+    'BASELINE',
+    'PRE_RECOVERY',
+    'RECOVERY'
+  ].includes(phase);
 }
 
 function extractFaceRoi(results) {

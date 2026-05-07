@@ -3,6 +3,7 @@ export const PARAMS = {
   filter: { low: 0.75, high: 3.0, order: 6 },
   posWindowSec: 1.6,
   hrWindowSec: 10.0,
+  maxFrameGapMs: 500,
   toleranceMs: 1000,
   skin: { yMin: 60, yMax: 255, cbMin: 77, cbMax: 127, crMin: 133, crMax: 173 }
 };
@@ -77,6 +78,10 @@ export class RPPGPipeline {
     if (!this.hasSyncedStart) {
       this.startTime = time;
       this.hasSyncedStart = true;
+      this.rawBuffer = [];
+    } else if (this.rawBuffer.length && time - this.rawBuffer[this.rawBuffer.length - 1].t > PARAMS.maxFrameGapMs) {
+      const samplePeriodMs = 1000 / PARAMS.targetFs;
+      this.startTime = time - (this.resampledBuffer.length * samplePeriodMs);
       this.rawBuffer = [];
     }
     this.rawBuffer.push({ r, g, b, t: time });
