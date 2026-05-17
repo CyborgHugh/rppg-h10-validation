@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile, appendFile, access } from 'node:fs/promises';
 import path from 'node:path';
 import { flattenParticipantSummary, summarizeSession } from './analysis.js';
-import { appendCsvLine, toCsv } from './csv.js';
+import { appendCsvLine, toCsv } from '../../src/csv.js';
 
 const SUMMARY_COLUMNS = [
   'session_id',
@@ -10,28 +10,90 @@ const SUMMARY_COLUMNS = [
   'language',
   'polar_connected',
   'trial_count',
-  'baseline_cwt_mae',
-  'baseline_cwt_rmse',
-  'baseline_cwt_bias',
-  'baseline_cwt_pearson_r',
-  'baseline_cwt_lin_ccc',
-  'baseline_ls_mae',
-  'baseline_ls_rmse',
-  'baseline_ls_bias',
-  'baseline_ls_pearson_r',
-  'baseline_ls_lin_ccc',
-  'recovery_cwt_mae',
-  'recovery_cwt_rmse',
-  'recovery_cwt_bias',
-  'recovery_cwt_pearson_r',
-  'recovery_cwt_lin_ccc',
-  'recovery_ls_mae',
-  'recovery_ls_rmse',
-  'recovery_ls_bias',
-  'recovery_ls_pearson_r',
-  'recovery_ls_lin_ccc',
+  ...beatCountSummaryColumns(),
   'trial_metrics_json',
+  'beat_count_indices_json',
   'phase_metrics_json'
+];
+
+const RPPG_HR_COLUMNS = [
+  'sessionId',
+  'participantId',
+  'wallTime',
+  'perfMs',
+  'phase',
+  'cwtBpm',
+  'lsBpm',
+  'cwtRawBpm',
+  'cwtGatedBpm',
+  'cwtRawAccepted',
+  'cwtGatedAccepted',
+  'cwtRejectReason',
+  'cwtPowerRatio',
+  'cwtLsDivergenceBpm',
+  'cwtJumpBpm',
+  'cwtCoverageRatio',
+  'targetFs',
+  'roiMode',
+  'roiComposition',
+  'skinMode',
+  'interEyeDeltaPct',
+  'interEyeVelocityPctPerSec',
+  'patchAreaDeltaPct',
+  'scaleJump'
+];
+
+const RPPG_RAW_COLUMNS = [
+  'sessionId',
+  'participantId',
+  'wallTime',
+  'perfMs',
+  'debugType',
+  'phase',
+  'rawR',
+  'rawG',
+  'rawB',
+  'frameDeltaMs',
+  'roiX',
+  'roiY',
+  'roiWidth',
+  'roiHeight',
+  'roiMode',
+  'roiComposition',
+  'skinMode',
+  'skinPixelCount',
+  'hardSkinPixelCount',
+  'effectiveSkinPixelCount',
+  'sampledPixelCount',
+  'skinFraction',
+  'hardSkinFraction',
+  'effectiveSkinFraction',
+  'rgbJump',
+  'faceRollDeg',
+  'interEyeDistancePx',
+  'interEyeDeltaPct',
+  'interEyeVelocityPctPerSec',
+  'patchAreaPx',
+  'patchAreaDeltaPct',
+  'fixedSampleCount',
+  'effectiveSkinSampleCount',
+  'scaleJump',
+  'roiMotionPx',
+  'roiRegionSet',
+  'roiCandidateCount',
+  'callbackPerfMs',
+  'resampledR',
+  'resampledG',
+  'resampledB',
+  'filteredR',
+  'filteredG',
+  'filteredB',
+  'meanR',
+  'meanG',
+  'meanB',
+  'alpha',
+  'posValue',
+  'posBufferLength'
 ];
 
 export async function createSession(dataRoot, { participantId, language }) {
@@ -64,15 +126,10 @@ export async function finalizeSession(dataRoot, session) {
     'hrBpm',
     'rrMsJson'
   ]));
-  await writeFile(path.join(sessionDir, 'rppg_hr_1hz.csv'), toCsv(normalized.rppgSamples, [
-    'sessionId',
-    'participantId',
-    'wallTime',
-    'perfMs',
-    'phase',
-    'cwtBpm',
-    'lsBpm'
-  ]));
+  await writeFile(path.join(sessionDir, 'rppg_hr_1hz.csv'), toCsv(normalized.rppgSamples, RPPG_HR_COLUMNS));
+  await writeFile(path.join(sessionDir, 'rppg_raw_signal.csv'), toCsv(normalized.rppgRawSamples, RPPG_RAW_COLUMNS));
+  await writeFile(path.join(sessionDir, 'upper_face_rppg_hr_1hz.csv'), toCsv(normalized.upperFaceRppgSamples, RPPG_HR_COLUMNS));
+  await writeFile(path.join(sessionDir, 'upper_face_rppg_raw_signal.csv'), toCsv(normalized.upperFaceRppgRawSamples, RPPG_RAW_COLUMNS));
   await writeFile(path.join(sessionDir, 'events.csv'), toCsv(normalized.events, [
     'sessionId',
     'participantId',
@@ -81,6 +138,7 @@ export async function finalizeSession(dataRoot, session) {
     'eventType',
     'phase',
     'trialId',
+    'attemptId',
     'payloadJson'
   ]));
   await writeFile(path.join(sessionDir, 'trial_summary.csv'), toCsv(summary.trialSummaries));
@@ -111,6 +169,9 @@ function normalizeSession(session) {
       rrMsJson: sample.rrMsJson ?? JSON.stringify(sample.rrIntervalsMs ?? [])
     })),
     rppgSamples: (session.rppgSamples ?? []).map(stamp),
+    rppgRawSamples: (session.rppgRawSamples ?? []).map(stamp),
+    upperFaceRppgSamples: (session.upperFaceRppgSamples ?? []).map(stamp),
+    upperFaceRppgRawSamples: (session.upperFaceRppgRawSamples ?? []).map(stamp),
     events: (session.events ?? []).map((event) => ({
       ...stamp(event),
       payloadJson: event.payloadJson ?? JSON.stringify(event.payload ?? {})
@@ -119,15 +180,34 @@ function normalizeSession(session) {
   };
 }
 
-async function writeJson(filePath, value) {
-  await writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`);
+function beatCountSummaryColumns() {
+  const scopes = ['total', 'baseline', 'recovery'];
+  const methods = [
+    'cwt',
+    'ls',
+    'madan_pca_cwt',
+    'madan_pos_cwt',
+    'upper_face_cwt',
+    'upper_face_ls',
+    'upper_face_madan_pca_cwt',
+    'upper_face_madan_pos_cwt'
+  ];
+  const metrics = [
+    'polar_beats',
+    'rppg_beats',
+    'signed_error',
+    'absolute_error',
+    'percent_error',
+    'alignment_index',
+    'inconsistency_index'
+  ];
+  return scopes.flatMap((scope) => methods.flatMap((method) => (
+    metrics.map((metric) => `${scope}_${method}_${metric}`)
+  )));
 }
 
-export async function readJsonBody(req) {
-  const chunks = [];
-  for await (const chunk of req) chunks.push(chunk);
-  const body = Buffer.concat(chunks).toString('utf8');
-  return body ? JSON.parse(body) : {};
+async function writeJson(filePath, value) {
+  await writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`);
 }
 
 export async function readManifest(dataRoot, sessionId) {

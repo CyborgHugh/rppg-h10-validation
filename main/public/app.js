@@ -1,5 +1,13 @@
-import { PARAMS, RPPGPipeline } from './rppg-pipeline.js';
+import { PARAMS, RPPGPipeline } from '/shared/algorithm/rppg-pipeline.js';
 import { connectPolarH10 } from './polar-client.js';
+import {
+  analyzeRoiCandidates,
+  combinePrimaryRois,
+  faceBoxFromLandmarks,
+  ROI_COMPOSITIONS,
+  ROI_MODES,
+  SKIN_MODES
+} from '/shared/algorithm/roi-utils.js';
 
 const TEXT = {
   en: {
@@ -44,7 +52,7 @@ const TEXT = {
     exercise: 'Activated State',
     exerciseInstructions: 'Stand up, push your chair back, and match each knee-up step to the metronome.',
     cooldown: 'Active Cool-Down',
-    cooldownInstructions: 'Walk gently in place at 80 SPM.',
+    cooldownInstructions: 'Walk gently in place at 80 SPM for 40 seconds.',
     preRecovery: 'Pre-Recovery',
     preRecoveryInstructions: 'Sit down immediately, face the camera, and stay perfectly still.',
     recovery: 'Recovery HCT',
@@ -95,7 +103,7 @@ const TEXT = {
     exercise: '激活状态',
     exerciseInstructions: '站起来，将椅子推后，并让每一步高抬腿都跟上节拍器。',
     cooldown: '积极冷身',
-    cooldownInstructions: '以 80 SPM 轻柔原地走动。',
+    cooldownInstructions: '以 80 SPM 轻柔原地走动 40 秒。',
     preRecovery: '恢复前',
     preRecoveryInstructions: '请立即坐下，面向摄像头，并保持完全静止。',
     recovery: '恢复期 HCT',
@@ -112,8 +120,7 @@ const dom = Object.fromEntries(
     'btn-baseline', 'btn-practice', 'btn-exercise', 'btn-save', 'polar-status', 'camera-status',
     'signal-status', 'phase-title', 'phase-instructions', 'phase-timer', 'trial-card',
     'trial-title', 'recording-pill', 'hct-input', 'hct-count-input', 'btn-submit-hct',
-    'stick-figure', 'video-layer', 'canvas-layer', 'hr-chart', 'events-list', 'results-output',
-    'arm-left', 'arm-right', 'leg-left', 'leg-right'
+    'high-knee-guide', 'video-layer', 'canvas-layer', 'hr-chart', 'events-list', 'results-output'
   ].map((id) => [camel(id), document.getElementById(id)])
 );
 
@@ -123,24 +130,40 @@ const state = {
   currentPhase: 'SETUP',
   hctPhase: null,
   baselineTrials: shuffle([30, 45, 60]),
-  recoveryTrials: [30, 30, 30, 30],
+  recoveryTrials: [30, 30, 30, 30, 30, 30],
   currentTrialIndex: 0,
   currentTrialId: null,
   trialStartPerfMs: 0,
+  trialEndPerfMs: 0,
   trialDurationSec: 0,
-  currentObjCwtBeats: 0,
-  currentObjLsBeats: 0,
   recoveryStartPerfMs: 0,
   events: [],
   polarSamples: [],
   rppgSamples: [],
+  rppgRawSamples: [],
+  upperFaceRppgSamples: [],
+  upperFaceRppgRawSamples: [],
   trials: [],
   faceFound: false,
   faceLossTime: null,
+  previousRoiCandidates: {},
+  previousUpperFaceRoiCandidates: {},
   lastRppgSamplePerfMs: 0,
+  lastUpperFaceRppgSamplePerfMs: 0,
   lastPolarBpm: null,
   polarMockTimer: null,
-  audioCtx: null
+  audioCtx: null,
+  activeCountdownTimer: null,
+  trialStartDelayTimer: null,
+  trialRecording: false,
+  trialAttemptCounters: {},
+  currentAttemptId: null,
+  awaitingInitialLock: false,
+  awaitingPreRecoveryLock: false,
+  awaitingTrialRecalibrationLock: false,
+  phaseSignalLocked: false,
+  pendingTrialRestartAfterLock: false,
+  pendingNextTrialAfterLock: false
 };
 
 const video = dom.videoLayer;
@@ -150,38 +173,96 @@ const chartCtx = dom.hrChart.getContext('2d');
 
 const pipeline = new RPPGPipeline({
   onProgress: (percent) => {
+    if (!isCalibrationPhase()) return;
     dom.signalStatus.textContent = `${percent}%`;
     dom.signalStatus.className = `status ${percent >= 100 ? 'ok' : 'warn'}`;
   },
-  onReady: () => {
-    if (state.currentPhase === 'CALIBRATION') {
-      dom.signalStatus.textContent = `${t('locked')} ${pipeline.cwtBpm.toFixed(0)} BPM`;
-      dom.btnBaseline.disabled = false;
-      if (!state.events.some((event) => event.eventType === 'rppg_signal_lock')) {
-        logEvent('rppg_signal_lock', { cwtBpm: pipeline.cwtBpm, lsBpm: pipeline.lsBpm });
-      }
-    } else if (state.currentPhase === 'PRE_RECOVERY') {
-      dom.signalStatus.textContent = `${t('locked')} ${pipeline.cwtBpm.toFixed(0)} BPM`;
-      dom.signalStatus.className = 'status ok';
-      if (!state.events.some((event) => event.eventType === 'pre_recovery_rppg_signal_lock')) {
-        logEvent('pre_recovery_rppg_signal_lock', { cwtBpm: pipeline.cwtBpm, lsBpm: pipeline.lsBpm });
+  onReady: (sample) => {
+    setSignalLocked(sample);
+  },
+  onHr: (sample) => {
+    updateLiveSignalStatus(sample);
+    if (shouldStoreRppgSample(state.currentPhase) && sample.t - state.lastRppgSamplePerfMs >= 1000) {
+      state.lastRppgSamplePerfMs = sample.t;
+      state.rppgSamples.push(buildHrSample(sample));
+      drawChart();
+      if (state.trialRecording && isFormalTrialPhase(state.currentPhase) && isInterruptedRppgSample(sample)) {
+        abortCurrentTrial('rppg_interruption');
       }
     }
   },
-  onHr: (sample) => {
-    if (shouldStoreRppgSample(state.currentPhase) && sample.t - state.lastRppgSamplePerfMs >= 1000) {
-      state.lastRppgSamplePerfMs = sample.t;
-      state.rppgSamples.push({
+  onRawSample: (sample) => {
+    if (shouldFeedRppg(state.currentPhase)) {
+      state.rppgRawSamples.push({
         wallTime: new Date().toISOString(),
-        perfMs: round(sample.t),
         phase: state.currentPhase,
-        cwtBpm: round(sample.cwtBpm),
-        lsBpm: round(sample.lsBpm)
+        ...sample
       });
-      drawChart();
+    }
+  },
+  onContinuityReset: (event) => handleContinuityReset(event, 'primary')
+});
+
+const upperFacePipeline = new RPPGPipeline({
+  onHr: (sample) => {
+    if (shouldStoreRppgSample(state.currentPhase) && sample.t - state.lastUpperFaceRppgSamplePerfMs >= 1000) {
+      state.lastUpperFaceRppgSamplePerfMs = sample.t;
+      state.upperFaceRppgSamples.push(buildHrSample(sample));
+    }
+  },
+  onRawSample: (sample) => {
+    if (shouldFeedRppg(state.currentPhase)) {
+      state.upperFaceRppgRawSamples.push({
+        wallTime: new Date().toISOString(),
+        phase: state.currentPhase,
+        ...sample
+      });
+    }
+  },
+  onContinuityReset: (event) => handleContinuityReset(event, 'upperFace')
+});
+
+function updateLiveSignalStatus(sample) {
+  if (!state.phaseSignalLocked || !sample) return;
+  dom.signalStatus.textContent = `${t('locked')} ${sample.cwtBpm.toFixed(0)} BPM`;
+  dom.signalStatus.className = 'status ok';
+}
+
+function setSignalLocked(sample) {
+  state.phaseSignalLocked = true;
+  if (sample) {
+    dom.signalStatus.textContent = `${t('locked')} ${sample.cwtBpm.toFixed(0)} BPM`;
+    dom.signalStatus.className = 'status ok';
+  }
+
+  if (state.currentPhase === 'CALIBRATION') {
+    state.awaitingInitialLock = false;
+    dom.btnBaseline.disabled = false;
+    if (!state.events.some((event) => event.eventType === 'rppg_signal_lock')) {
+      logEvent('rppg_signal_lock', { cwtBpm: sample.cwtBpm, lsBpm: sample.lsBpm });
+    }
+    return;
+  }
+
+  if (state.currentPhase === 'PRE_RECOVERY' && state.awaitingPreRecoveryLock) {
+    state.awaitingPreRecoveryLock = false;
+    logEvent('pre_recovery_rppg_signal_lock', { cwtBpm: sample.cwtBpm, lsBpm: sample.lsBpm });
+    setCountdown(20, startRecoveryPhase);
+    return;
+  }
+
+  if (state.currentPhase === 'TRIAL_RECALIBRATION' && state.awaitingTrialRecalibrationLock) {
+    state.awaitingTrialRecalibrationLock = false;
+    logEvent('trial_recalibration_signal_lock', { cwtBpm: sample.cwtBpm, lsBpm: sample.lsBpm });
+    if (state.pendingTrialRestartAfterLock) {
+      state.pendingTrialRestartAfterLock = false;
+      setCountdown(3, restartTrialAfterRecalibration);
+    } else if (state.pendingNextTrialAfterLock) {
+      state.pendingNextTrialAfterLock = false;
+      setCountdown(3, startHctTrial);
     }
   }
-});
+}
 
 applyLanguage();
 wireEvents();
@@ -284,6 +365,8 @@ async function startCamera() {
     });
     await camera.start();
     setStatus(dom.cameraStatus, 'Running', 'ok');
+    state.phaseSignalLocked = false;
+    state.awaitingInitialLock = true;
     pipeline.reset();
     logEvent('camera_start');
     setPhase('CALIBRATION', t('calibration'), t('calibrationInstructions'));
@@ -303,11 +386,43 @@ function onResults(results) {
   ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
   if (!shouldFeedRppg(state.currentPhase)) return;
 
-  const roi = extractFaceRoi(results);
-  if (roi) {
+  const rois = extractFaceRois(results);
+  if (rois?.primaryRoi) {
     state.faceFound = true;
     state.faceLossTime = null;
-    pipeline.pushFrame(roi.r, roi.g, roi.b, performance.now());
+    const perfMs = performance.now();
+    const roi = rois.primaryRoi;
+    pipeline.pushFrame(roi.r, roi.g, roi.b, perfMs, {
+      phase: state.currentPhase,
+      roiX: roi.x,
+      roiY: roi.y,
+      roiWidth: roi.width,
+      roiHeight: roi.height,
+      skinPixelCount: roi.skinPixelCount,
+      sampledPixelCount: roi.sampledPixelCount,
+      skinFraction: roi.skinFraction,
+      hardSkinFraction: roi.hardSkinFraction,
+      effectiveSkinPixelCount: roi.effectiveSkinPixelCount,
+      effectiveSkinSampleCount: roi.effectiveSkinSampleCount,
+      fixedSampleCount: roi.fixedSampleCount,
+      roiMotionPx: roi.roiMotionPx,
+      rgbJump: roi.rgbJump,
+      faceRollDeg: roi.faceRollDeg,
+      interEyeDistancePx: roi.interEyeDistancePx,
+      interEyeDeltaPct: roi.interEyeDeltaPct,
+      interEyeVelocityPctPerSec: roi.interEyeVelocityPctPerSec,
+      patchAreaPx: roi.patchAreaPx,
+      patchAreaDeltaPct: roi.patchAreaDeltaPct,
+      scaleJump: roi.scaleJump,
+      roiMode: roi.roiMode,
+      skinMode: roi.skinMode,
+      roiComposition: roi.roiComposition,
+      roiRegionSet: roi.regionSet,
+      roiCandidateCount: roi.candidateCount
+    });
+    if (rois.upperFaceRoi) {
+      pushUpperFaceFrame(rois.upperFaceRoi, perfMs);
+    }
   } else {
     handleFaceLoss();
   }
@@ -320,46 +435,116 @@ function shouldFeedRppg(phase) {
     'PRACTICE',
     'BASELINE',
     'PRE_RECOVERY',
-    'RECOVERY'
+    'RECOVERY',
+    'TRIAL_RECALIBRATION'
   ].includes(phase);
 }
 
 function shouldStoreRppgSample(phase) {
-  return ['BASELINE', 'PRE_RECOVERY', 'RECOVERY'].includes(phase);
+  return state.phaseSignalLocked && [
+    'CALIBRATION',
+    'BASELINE_READY',
+    'PRACTICE',
+    'BASELINE',
+    'PRE_RECOVERY',
+    'RECOVERY',
+    'TRIAL_RECALIBRATION'
+  ].includes(phase);
 }
 
-function extractFaceRoi(results) {
+function extractFaceRois(results) {
   if (!results.multiFaceLandmarks?.length) return null;
   const landmarks = results.multiFaceLandmarks[0];
-  let minX = 1, minY = 1, maxX = 0, maxY = 0;
-  for (const pt of landmarks) {
-    minX = Math.min(minX, pt.x); minY = Math.min(minY, pt.y);
-    maxX = Math.max(maxX, pt.x); maxY = Math.max(maxY, pt.y);
-  }
   const width = canvas.width;
   const height = canvas.height;
-  let x0 = Math.max(0, Math.floor(minX * width));
-  let y0 = Math.max(0, Math.floor(minY * height));
-  let w = Math.min(width - x0, Math.floor((maxX - minX) * width));
-  let h = Math.min(height - y0, Math.floor((maxY - minY) * height * 0.6));
+  const faceBox = faceBoxFromLandmarks(landmarks, width, height);
+  if (!faceBox) return null;
+  const imageData = ctx.getImageData(0, 0, width, height);
+  const perfMs = performance.now();
+  const candidates = analyzeRoiCandidates({
+    imageData,
+    landmarks,
+    faceBox,
+    imageWidth: width,
+    imageHeight: height,
+    skinParams: PARAMS.skin,
+    previousCandidates: state.previousRoiCandidates,
+    mode: ROI_MODES.BOX_RECT_LEGACY,
+    skinMode: SKIN_MODES.HARD_YCBCR,
+    roiComposition: ROI_COMPOSITIONS.ALL,
+    perfMs
+  });
+  state.previousRoiCandidates = Object.fromEntries(candidates.map((candidate) => [candidate.name, candidate]));
+  const legacyCandidates = analyzeRoiCandidates({
+    imageData,
+    faceBox,
+    imageWidth: width,
+    imageHeight: height,
+    skinParams: PARAMS.skin,
+    previousCandidates: state.previousUpperFaceRoiCandidates,
+    mode: ROI_MODES.BOX_RECT_LEGACY,
+    skinMode: SKIN_MODES.HARD_YCBCR,
+    roiComposition: ROI_COMPOSITIONS.ALL,
+    perfMs
+  });
+  state.previousUpperFaceRoiCandidates = Object.fromEntries(legacyCandidates.map((candidate) => [candidate.name, candidate]));
+  const roi = combinePrimaryRois(candidates, { roiComposition: ROI_COMPOSITIONS.ALL });
+  const upperFace = legacyCandidates.find((candidate) => candidate.name === 'upperFace' && candidate.accepted);
+  if (!roi) return null;
   ctx.strokeStyle = 'rgba(219, 39, 119, .85)';
   ctx.lineWidth = 2;
-  ctx.strokeRect(x0, y0, w, h);
-  const imageData = ctx.getImageData(0, 0, width, height);
-  let rSum = 0, gSum = 0, bSum = 0, count = 0;
-  for (let y = y0; y < y0 + h; y += 2) {
-    for (let x = x0; x < x0 + w; x += 2) {
-      const idx = (y * width + x) * 4;
-      const r = imageData.data[idx], g = imageData.data[idx + 1], b = imageData.data[idx + 2];
-      const yVal = 16 + (65.481 * r + 128.553 * g + 24.966 * b) / 255;
-      const cb = 128 + (-37.797 * r - 74.203 * g + 112.0 * b) / 255;
-      const cr = 128 + (112.0 * r - 93.786 * g - 18.214 * b) / 255;
-      if (yVal > PARAMS.skin.yMin && cb >= PARAMS.skin.cbMin && cb <= PARAMS.skin.cbMax && cr >= PARAMS.skin.crMin && cr <= PARAMS.skin.crMax) {
-        rSum += r; gSum += g; bSum += b; count += 1;
-      }
+  for (const candidate of candidates.filter((candidate) => candidate.accepted && candidate.name !== 'upperFace')) {
+    if (candidate.shape === 'polygon' && candidate.points?.length) {
+      ctx.beginPath();
+      candidate.points.forEach((point, index) => {
+        if (index === 0) ctx.moveTo(point.x, point.y);
+        else ctx.lineTo(point.x, point.y);
+      });
+      ctx.closePath();
+      ctx.stroke();
+    } else {
+      ctx.strokeRect(candidate.x, candidate.y, candidate.width, candidate.height);
     }
   }
-  return count > (w * h / 4) * 0.05 ? { r: rSum / count, g: gSum / count, b: bSum / count } : null;
+  return {
+    primaryRoi: roi,
+    upperFaceRoi: upperFace ? {
+      ...upperFace,
+      regionSet: 'upperFace',
+      candidateCount: 1
+    } : null
+  };
+}
+
+function pushUpperFaceFrame(roi, perfMs) {
+  upperFacePipeline.pushFrame(roi.r, roi.g, roi.b, perfMs, {
+    phase: state.currentPhase,
+    roiX: roi.x,
+    roiY: roi.y,
+    roiWidth: roi.width,
+    roiHeight: roi.height,
+    skinPixelCount: roi.skinPixelCount,
+    sampledPixelCount: roi.sampledPixelCount,
+    skinFraction: roi.skinFraction,
+    hardSkinFraction: roi.hardSkinFraction,
+    effectiveSkinPixelCount: roi.effectiveSkinPixelCount,
+    effectiveSkinSampleCount: roi.effectiveSkinSampleCount,
+    fixedSampleCount: roi.fixedSampleCount,
+    roiMotionPx: roi.roiMotionPx,
+    rgbJump: roi.rgbJump,
+    faceRollDeg: roi.faceRollDeg,
+    interEyeDistancePx: roi.interEyeDistancePx,
+    interEyeDeltaPct: roi.interEyeDeltaPct,
+    interEyeVelocityPctPerSec: roi.interEyeVelocityPctPerSec,
+    patchAreaPx: roi.patchAreaPx,
+    patchAreaDeltaPct: roi.patchAreaDeltaPct,
+    scaleJump: roi.scaleJump,
+    roiMode: ROI_MODES.BOX_RECT_LEGACY,
+    skinMode: SKIN_MODES.HARD_YCBCR,
+    roiComposition: ROI_COMPOSITIONS.ALL,
+    roiRegionSet: 'upperFace',
+    roiCandidateCount: 1
+  });
 }
 
 function handleFaceLoss() {
@@ -368,9 +553,7 @@ function handleFaceLoss() {
     state.faceFound = false;
   }
   if (state.faceLossTime && ['BASELINE', 'RECOVERY'].includes(state.currentPhase) && performance.now() - state.faceLossTime > 3000) {
-    logEvent('trial_abort_face_loss', { trialId: state.currentTrialId });
-    alert('Camera lost face tracking for more than 3 seconds. The current trial will restart.');
-    startHctTrial();
+    abortCurrentTrial('face_absence');
   }
 }
 
@@ -397,31 +580,30 @@ function startHctTrial() {
   const trialNumber = isPractice ? 0 : state.currentTrialIndex + 1;
   state.trialDurationSec = duration;
   state.currentTrialId = isPractice ? 'practice' : `${state.hctPhase.toLowerCase()}-${trialNumber}`;
+  state.currentAttemptId = isPractice ? 'practice' : nextAttemptId(state.currentTrialId);
   if (state.hctPhase === 'BASELINE' && state.currentTrialIndex === 0 && !state.events.some((event) => event.eventType === 'phase_start' && event.phase === 'BASELINE')) {
     logEvent('phase_start', {}, 'BASELINE');
   }
-  logEvent('trial_hint', { durationSec: duration }, phase, state.currentTrialId);
+  logEvent('trial_hint', { durationSec: duration, attemptId: state.currentAttemptId }, phase, state.currentTrialId);
   setPhase(phase, isPractice ? t('practice') : `${t(state.hctPhase === 'BASELINE' ? 'baseline' : 'recovery')} ${trialNumber}`, t('focus'));
 
-  setTimeout(() => {
+  if (state.trialStartDelayTimer) clearTimeout(state.trialStartDelayTimer);
+  state.trialStartDelayTimer = setTimeout(() => {
     dom.trialTitle.textContent = t('count');
     dom.recordingPill.classList.remove('hidden');
     playTone(1000, 0.4, 'square', 2.0);
-    pipeline.hrLog = [];
-    const initialPosLength = pipeline.posBuffer.length;
     state.trialStartPerfMs = performance.now();
-    logEvent('trial_start', { durationSec: duration }, phase, state.currentTrialId);
+    state.trialRecording = !isPractice;
+    logEvent('trial_start', { durationSec: duration, attemptId: state.currentAttemptId }, phase, state.currentTrialId);
     setCountdown(duration, () => {
+      state.trialRecording = false;
       playTone(500, 0.4, 'square', 2.0);
       dom.trialTitle.textContent = t('stop');
       dom.recordingPill.classList.add('hidden');
-      const targetSamples = Math.floor(duration * PARAMS.targetFs);
-      const trialSignal = pipeline.posBuffer.slice(-Math.min(pipeline.posBuffer.length - initialPosLength, targetSamples));
-      state.currentObjCwtBeats = pipeline.countBeatsCWT(trialSignal, targetSamples);
-      const validLs = pipeline.hrLog.filter((entry) => entry.t > state.trialStartPerfMs).map((entry) => entry.lsBpm);
-      const avgLsHr = validLs.length ? validLs.reduce((sum, value) => sum + value, 0) / validLs.length : 0;
-      state.currentObjLsBeats = (avgLsHr / 60) * duration;
-      logEvent('trial_end', { cwtBeats: state.currentObjCwtBeats, lsBeats: state.currentObjLsBeats }, phase, state.currentTrialId);
+      state.trialEndPerfMs = performance.now();
+      logEvent('trial_end', {
+        attemptId: state.currentAttemptId
+      }, phase, state.currentTrialId);
       dom.hctInput.classList.remove('hidden');
       dom.hctCountInput.value = '';
       dom.hctCountInput.focus();
@@ -437,14 +619,13 @@ function submitHctCount() {
   if (!isPractice) {
     state.trials.push({
       trialId: state.currentTrialId,
+      attemptId: state.currentAttemptId,
       phase,
       trialNumber: state.currentTrialIndex + 1,
       durationSec: state.trialDurationSec,
       startPerfMs: round(state.trialStartPerfMs),
-      endPerfMs: round(performance.now()),
-      subjectiveBeats,
-      cwtBeats: round(state.currentObjCwtBeats),
-      lsBeats: round(state.currentObjLsBeats)
+      endPerfMs: round(state.trialEndPerfMs),
+      subjectiveBeats
     });
   }
   state.currentTrialIndex += 1;
@@ -465,21 +646,22 @@ function submitHctCount() {
 function runItiAndNext() {
   dom.hctInput.classList.add('hidden');
   dom.trialTitle.textContent = t('rest');
-  setCountdown(10, startHctTrial);
+  setCountdown(10, ensurePhaseSignalLockBeforeNextTrial);
 }
 
 function runExercise() {
   setPhase('EXERCISE', t('exercise'), t('exerciseInstructions'));
   logEvent('exercise_start');
-  dom.stickFigure.classList.remove('hidden');
+  dom.highKneeGuide.classList.remove('hidden');
   let total = 180;
   let pace = 80;
   let interval = null;
   const setPace = (nextPace) => {
     pace = nextPace;
     logEvent('exercise_pace_change', { spm: pace });
+    dom.highKneeGuide.src = `/assets/high-knee-${pace}.gif`;
     if (interval) clearInterval(interval);
-    interval = setInterval(() => { playTone(800, 0.1, 'square', 0.1); animateFigure(); }, 60000 / pace);
+    interval = setInterval(() => { playTone(800, 0.1, 'square', 0.1); }, 60000 / pace);
   };
   setPace(80);
   const timer = setInterval(() => {
@@ -491,7 +673,7 @@ function runExercise() {
     if (total <= 0) {
       clearInterval(timer);
       clearInterval(interval);
-      dom.stickFigure.classList.add('hidden');
+      dom.highKneeGuide.classList.add('hidden');
       runCooldown();
     }
   }, 1000);
@@ -500,16 +682,20 @@ function runExercise() {
 function runCooldown() {
   setPhase('COOLDOWN', t('cooldown'), t('cooldownInstructions'));
   logEvent('cooldown_start');
-  setCountdown(30, runPreRecovery);
+  setCountdown(40, runPreRecovery);
 }
 
 function runPreRecovery() {
+  state.phaseSignalLocked = false;
   pipeline.reset();
+  upperFacePipeline.reset();
   state.lastRppgSamplePerfMs = 0;
+  state.lastUpperFaceRppgSamplePerfMs = 0;
+  state.awaitingPreRecoveryLock = true;
   setPhase('PRE_RECOVERY', t('preRecovery'), t('preRecoveryInstructions'));
   logEvent('pre_recovery_start');
+  dom.phaseTimer.textContent = '--';
   playTone(1000, 0.4, 'square', 0.2);
-  setCountdown(10, startRecoveryPhase);
 }
 
 function startRecoveryPhase() {
@@ -536,6 +722,9 @@ async function saveSession() {
     events: state.events,
     polarSamples: state.polarSamples,
     rppgSamples: state.rppgSamples,
+    rppgRawSamples: state.rppgRawSamples,
+    upperFaceRppgSamples: state.upperFaceRppgSamples,
+    upperFaceRppgRawSamples: state.upperFaceRppgRawSamples,
     trials: state.trials
   };
   const response = await fetch(`/api/session/${encodeURIComponent(state.session.sessionId)}/finalize`, {
@@ -546,7 +735,7 @@ async function saveSession() {
   const result = await response.json();
   if (!response.ok) throw new Error(result.error || 'Save failed');
   renderSummary(result.summary);
-  setPhase('DONE', t('saved'), `${t('saved')}: data/sessions/${state.session.sessionId}`);
+  setPhase('DONE', t('saved'), `${t('saved')}: main/data/sessions/${state.session.sessionId}`);
 }
 
 function renderSummary(summary) {
@@ -560,14 +749,124 @@ function renderSummary(summary) {
       <td>${fmt(trial.cwtError?.absolutePercentError)}</td>
       <td>${fmt(trial.lsBeats)}</td>
       <td>${fmt(trial.lsError?.absolutePercentError)}</td>
+      <td>${fmt(trial.upperFaceCwtBeats)}</td>
+      <td>${fmt(trial.upperFaceCwtError?.absolutePercentError)}</td>
+      <td>${fmt(trial.upperFaceLsBeats)}</td>
+      <td>${fmt(trial.upperFaceLsError?.absolutePercentError)}</td>
+      <td>${fmt(trial.madanPcaCwtBeats)}</td>
+      <td>${fmt(trial.madanPcaCwtError?.absolutePercentError)}</td>
+      <td>${fmt(trial.madanPosCwtBeats)}</td>
+      <td>${fmt(trial.madanPosCwtError?.absolutePercentError)}</td>
     </tr>
   `).join('');
   dom.resultsOutput.innerHTML = `
     <table>
-      <thead><tr><th>Trial</th><th>Duration</th><th>Subjective</th><th>Polar beats</th><th>CWT beats</th><th>CWT APE %</th><th>LS beats</th><th>LS APE %</th></tr></thead>
+      <thead><tr><th>Trial</th><th>Duration</th><th>Subjective</th><th>Polar beats</th><th>CWT beats</th><th>CWT APE %</th><th>LS beats</th><th>LS APE %</th><th>Upper-face CWT</th><th>Upper-face CWT APE %</th><th>Upper-face LS</th><th>Upper-face LS APE %</th><th>Madan PCA beats</th><th>Madan PCA APE %</th><th>Madan POS beats</th><th>Madan POS APE %</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
   `;
+}
+
+function buildHrSample(sample) {
+  return {
+    wallTime: new Date().toISOString(),
+    perfMs: round(sample.t),
+    phase: state.currentPhase,
+    cwtBpm: round(sample.cwtBpm),
+    lsBpm: round(sample.lsBpm),
+    cwtRawBpm: round(sample.cwtRawBpm),
+    cwtGatedBpm: round(sample.cwtGatedBpm),
+    cwtRawAccepted: sample.cwtRawAccepted,
+    cwtGatedAccepted: sample.cwtGatedAccepted,
+    cwtRejectReason: sample.cwtRejectReason,
+    cwtPowerRatio: round(sample.cwtPowerRatio, 6),
+    cwtLsDivergenceBpm: round(sample.cwtLsDivergenceBpm),
+    cwtJumpBpm: round(sample.cwtJumpBpm),
+    cwtCoverageRatio: round(sample.cwtCoverageRatio, 6),
+    targetFs: sample.targetFs,
+    roiMode: sample.roiMode,
+    roiComposition: sample.roiComposition,
+    skinMode: sample.skinMode,
+    interEyeDeltaPct: round(sample.interEyeDeltaPct),
+    interEyeVelocityPctPerSec: round(sample.interEyeVelocityPctPerSec),
+    patchAreaDeltaPct: round(sample.patchAreaDeltaPct),
+    scaleJump: sample.scaleJump
+  };
+}
+
+function abortCurrentTrial(reason) {
+  if (!state.trialRecording || !isFormalTrialPhase(state.currentPhase)) return;
+  state.trialRecording = false;
+  state.phaseSignalLocked = false;
+  state.pendingTrialRestartAfterLock = true;
+  state.pendingNextTrialAfterLock = false;
+  clearActiveTimers();
+  dom.recordingPill.classList.add('hidden');
+  dom.hctInput.classList.add('hidden');
+  logEvent('trial_abort', { reason, attemptId: state.currentAttemptId }, state.hctPhase, state.currentTrialId);
+  pipeline.reset();
+  upperFacePipeline.reset();
+  state.lastRppgSamplePerfMs = 0;
+  state.lastUpperFaceRppgSamplePerfMs = 0;
+  state.awaitingTrialRecalibrationLock = true;
+  setPhase('TRIAL_RECALIBRATION', t('calibration'), t('calibrationInstructions'));
+  dom.phaseTimer.textContent = '--';
+  setStatus(dom.signalStatus, t('lost'), 'danger');
+}
+
+function handleContinuityReset(event, source) {
+  if (isCalibrationPhase() || !shouldFeedRppg(state.currentPhase) || !state.phaseSignalLocked) return;
+  const reason = event?.reason ?? 'signal_continuity_reset';
+  if (state.trialRecording && isFormalTrialPhase(state.currentPhase)) {
+    abortCurrentTrial(reason);
+    return;
+  }
+  markSignalInterrupted(reason, source);
+}
+
+function markSignalInterrupted(reason, source = 'primary') {
+  if (!state.phaseSignalLocked) return;
+  state.phaseSignalLocked = false;
+  logEvent('phase_signal_interruption', { reason, source }, state.hctPhase ?? state.currentPhase, state.currentTrialId);
+  pipeline.reset();
+  upperFacePipeline.reset();
+  state.lastRppgSamplePerfMs = 0;
+  state.lastUpperFaceRppgSamplePerfMs = 0;
+  setStatus(dom.signalStatus, t('lost'), 'danger');
+}
+
+function ensurePhaseSignalLockBeforeNextTrial() {
+  if (state.phaseSignalLocked) {
+    startHctTrial();
+    return;
+  }
+  state.pendingNextTrialAfterLock = true;
+  state.pendingTrialRestartAfterLock = false;
+  state.awaitingTrialRecalibrationLock = true;
+  setPhase('TRIAL_RECALIBRATION', t('calibration'), t('calibrationInstructions'));
+  dom.phaseTimer.textContent = '--';
+  pipeline.reset();
+  upperFacePipeline.reset();
+}
+
+function restartTrialAfterRecalibration() {
+  startHctTrial();
+}
+
+function isCalibrationPhase() {
+  return (
+    (state.currentPhase === 'CALIBRATION' && state.awaitingInitialLock)
+    || (state.currentPhase === 'PRE_RECOVERY' && state.awaitingPreRecoveryLock)
+    || (state.currentPhase === 'TRIAL_RECALIBRATION' && state.awaitingTrialRecalibrationLock)
+  );
+}
+
+function isFormalTrialPhase(phase) {
+  return phase === 'BASELINE' || phase === 'RECOVERY';
+}
+
+function isInterruptedRppgSample(sample) {
+  return /roi_motion|frame_gap|scale_jump/.test(String(sample.cwtRejectReason || ''));
 }
 
 function logEvent(eventType, payload = {}, phase = state.currentPhase, trialId = state.currentTrialId) {
@@ -578,6 +877,7 @@ function logEvent(eventType, payload = {}, phase = state.currentPhase, trialId =
     eventType,
     phase,
     trialId,
+    attemptId: payload.attemptId ?? state.currentAttemptId,
     payload
   };
   state.events.push(event);
@@ -594,30 +894,28 @@ function setPhase(phase, title, instructions) {
 }
 
 function setCountdown(seconds, onDone) {
+  if (state.activeCountdownTimer) clearInterval(state.activeCountdownTimer);
   let remaining = seconds;
   dom.phaseTimer.textContent = formatSeconds(remaining);
-  const timer = setInterval(() => {
+  state.activeCountdownTimer = setInterval(() => {
     remaining -= 1;
     dom.phaseTimer.textContent = formatSeconds(remaining);
     if (remaining <= 0) {
-      clearInterval(timer);
+      clearInterval(state.activeCountdownTimer);
+      state.activeCountdownTimer = null;
       onDone();
     }
   }, 1000);
 }
 
-function animateFigure() {
-  const up = dom.legLeft.getAttribute('d').includes('L 30 60');
-  if (up) {
-    dom.legLeft.setAttribute('d', 'M 50 60 L 40 80 L 30 90');
-    dom.legRight.setAttribute('d', 'M 50 60 L 70 60 L 70 90');
-    dom.armLeft.setAttribute('d', 'M 50 40 L 30 50 L 20 40');
-    dom.armRight.setAttribute('d', 'M 50 40 L 70 30 L 80 20');
-  } else {
-    dom.legLeft.setAttribute('d', 'M 50 60 L 30 60 L 30 90');
-    dom.legRight.setAttribute('d', 'M 50 60 L 60 80 L 70 90');
-    dom.armLeft.setAttribute('d', 'M 50 40 L 30 30 L 20 20');
-    dom.armRight.setAttribute('d', 'M 50 40 L 70 50 L 80 40');
+function clearActiveTimers() {
+  if (state.activeCountdownTimer) {
+    clearInterval(state.activeCountdownTimer);
+    state.activeCountdownTimer = null;
+  }
+  if (state.trialStartDelayTimer) {
+    clearTimeout(state.trialStartDelayTimer);
+    state.trialStartDelayTimer = null;
   }
 }
 
@@ -699,4 +997,9 @@ function shuffle(array) {
     [copy[i], copy[j]] = [copy[j], copy[i]];
   }
   return copy;
+}
+
+function nextAttemptId(trialId) {
+  state.trialAttemptCounters[trialId] = (state.trialAttemptCounters[trialId] ?? 0) + 1;
+  return `${trialId}-attempt-${state.trialAttemptCounters[trialId]}`;
 }

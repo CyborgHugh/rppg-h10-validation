@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>rPPG x Polar H10 Validation</title>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div>
+        <h1 data-i18n="appTitle">rPPG x Polar H10 Validation</h1>
+        <p data-i18n="subtitle">Local experiment runner for algorithm validation</p>
+      </div>
+      <div class="top-actions">
+        <select id="language-select" aria-label="Language">
+          <option value="en">English</option>
+          <option value="zh">中文</option>
+        </select>
+        <button id="btn-save" class="primary" disabled data-i18n="saveSession">Save Session</button>
+      </div>
+    </header>
+
+    <main class="grid">
+      <section class="panel setup-panel">
+        <h2 data-i18n="setup">Setup</h2>
+        <label>
+          <span data-i18n="participant">Participant</span>
+          <input id="participant-id" type="text" placeholder="P001">
+        </label>
+        <div class="button-row">
+          <button id="btn-session" class="primary" data-i18n="startSession">Start Session</button>
+          <button id="btn-polar" disabled data-i18n="connectPolar">Connect Polar H10</button>
+          <button id="btn-mock-polar" disabled data-i18n="mockPolar">Simulate Polar</button>
+          <button id="btn-camera" disabled data-i18n="startCamera">Start Camera</button>
+        </div>
+        <div class="status-grid">
+          <div>
+            <span class="label" data-i18n="polarH10">Polar H10</span>
+            <strong id="polar-status" class="status warn" data-i18n="notConnected">Not connected</strong>
+          </div>
+          <div>
+            <span class="label" data-i18n="camera">Camera</span>
+            <strong id="camera-status" class="status warn" data-i18n="notStarted">Not started</strong>
+          </div>
+          <div>
+            <span class="label" data-i18n="signal">rPPG Signal</span>
+            <strong id="signal-status" class="status warn">0%</strong>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel experiment-panel">
+        <div class="phase-header">
+          <div>
+            <span class="label" data-i18n="currentPhase">Current phase</span>
+            <h2 id="phase-title" data-i18n="waiting">Waiting</h2>
+          </div>
+          <div id="phase-timer" class="timer">--</div>
+        </div>
+        <p id="phase-instructions" class="instructions" data-i18n="setupInstructions">Create a session, connect Polar H10, then start the camera.</p>
+        <div id="trial-card" class="trial-card hidden">
+          <h3 id="trial-title">Focus on your heartbeats...</h3>
+          <div id="recording-pill" class="recording hidden"><span></span><b data-i18n="recording">RECORDING</b></div>
+          <div id="hct-input" class="hidden">
+            <label>
+              <span data-i18n="countPrompt">How many heartbeats did you count?</span>
+              <input id="hct-count-input" type="number" min="0" placeholder="35">
+            </label>
+            <button id="btn-submit-hct" class="primary" data-i18n="submit">Submit</button>
+          </div>
+        </div>
+        <img id="high-knee-guide" class="exercise-guide hidden" src="/assets/high-knee-80.gif" alt="High-knee exercise guide">
+        <div class="button-row">
+          <button id="btn-baseline" disabled data-i18n="startBaseline">Start Baseline HCT</button>
+          <button id="btn-practice" class="hidden" data-i18n="startPractice">Start Practice Trial</button>
+          <button id="btn-exercise" class="hidden" data-i18n="startExercise">Start 3-Min Exercise</button>
+        </div>
+      </section>
+
+      <section class="panel video-panel">
+        <h2 data-i18n="cameraPreview">Camera Preview</h2>
+        <video id="video-layer" playsinline muted autoplay></video>
+        <canvas id="canvas-layer"></canvas>
+      </section>
+
+      <section class="panel chart-panel">
+        <h2 data-i18n="liveHr">Live HR Comparison</h2>
+        <canvas id="hr-chart" width="900" height="260"></canvas>
+        <div class="legend">
+          <span class="polar" data-i18n="polar">Polar</span>
+          <span class="cwt">CWT</span>
+          <span class="ls">LS</span>
+        </div>
+      </section>
+
+      <section class="panel events-panel">
+        <h2 data-i18n="events">Events</h2>
+        <ol id="events-list"></ol>
+      </section>
+
+      <section class="panel results-panel">
+        <h2 data-i18n="trialSummary">Trial Summary</h2>
+        <div id="results-output" class="table-wrap">
+          <p class="muted" data-i18n="noResults">Results will appear after the session is saved.</p>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

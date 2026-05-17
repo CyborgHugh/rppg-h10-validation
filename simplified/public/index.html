@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>rPPG x Polar H10 Validation</title>
+  <title>Simplified rPPG x Polar H10 Validation</title>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
   <link rel="stylesheet" href="/styles.css">
@@ -12,8 +12,8 @@
   <div class="app-shell">
     <header class="topbar">
       <div>
-        <h1 data-i18n="appTitle">rPPG x Polar H10 Validation</h1>
-        <p data-i18n="subtitle">Local experiment runner for algorithm validation</p>
+        <h1 data-i18n="appTitle">Simplified rPPG x Polar H10 Validation</h1>
+        <p data-i18n="subtitle">Baseline, exercise, recalibration, and recovery interval validation</p>
       </div>
       <div class="top-actions">
         <select id="language-select" aria-label="Language">
@@ -62,15 +62,13 @@
           <div id="phase-timer" class="timer">--</div>
         </div>
         <p id="phase-instructions" class="instructions" data-i18n="setupInstructions">Create a session, connect Polar H10, then start the camera.</p>
-        <div id="trial-card" class="trial-card hidden">
-          <h3 id="trial-title">Focus on your heartbeats...</h3>
-          <div id="recording-pill" class="recording hidden"><span></span><b data-i18n="recording">RECORDING</b></div>
-          <div id="hct-input" class="hidden">
-            <label>
-              <span data-i18n="countPrompt">How many heartbeats did you count?</span>
-              <input id="hct-count-input" type="number" min="0" placeholder="35">
-            </label>
-            <button id="btn-submit-hct" class="primary" data-i18n="submit">Submit</button>
+        <div class="protocol-panel">
+          <div>
+            <span class="label" data-i18n="activeWindow">Active window</span>
+            <strong id="interval-label" data-i18n="notRunning">Not running</strong>
+          </div>
+          <div class="progress-track" aria-hidden="true">
+            <div id="phase-progress"></div>
           </div>
         </div>
         <svg id="stick-figure" class="stick hidden" viewBox="0 0 100 100" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
@@ -82,9 +80,7 @@
           <path id="leg-right" d="M 50 60 L 70 60 L 70 90"></path>
         </svg>
         <div class="button-row">
-          <button id="btn-baseline" disabled data-i18n="startBaseline">Start Baseline HCT</button>
-          <button id="btn-practice" class="hidden" data-i18n="startPractice">Start Practice Trial</button>
-          <button id="btn-exercise" class="hidden" data-i18n="startExercise">Start 3-Min Exercise</button>
+          <button id="btn-protocol" disabled data-i18n="startProtocol">Start Baseline Measurement</button>
         </div>
       </section>
 
@@ -109,10 +105,17 @@
         <ol id="events-list"></ol>
       </section>
 
+      <section class="panel intervals-panel">
+        <h2 data-i18n="intervals">Interval Counts</h2>
+        <div id="intervals-output" class="table-wrap">
+          <p class="muted" data-i18n="intervalsPending">Intervals will appear during baseline and recovery.</p>
+        </div>
+      </section>
+
       <section class="panel results-panel">
-        <h2 data-i18n="trialSummary">Trial Summary</h2>
+        <h2 data-i18n="participantSummary">Participant Summary</h2>
         <div id="results-output" class="table-wrap">
-          <p class="muted" data-i18n="noResults">Results will appear after the session is saved.</p>
+          <p class="muted" data-i18n="noResults">Summary will appear after the session is saved.</p>
         </div>
       </section>
     </main>

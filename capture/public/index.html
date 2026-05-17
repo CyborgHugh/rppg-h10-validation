@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Raw rPPG Capture</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main class="app-shell">
+    <header class="topbar">
+      <div>
+        <h1>Raw rPPG Capture</h1>
+        <p>Record one reusable video and synchronized Polar H10 timeline for future replay validation.</p>
+      </div>
+      <a href="/replay.html">Replay</a>
+    </header>
+
+    <section class="panel">
+      <label>Participant <input id="participant-id" placeholder="P001"></label>
+      <div class="button-row">
+        <button id="btn-create-session">Create Session</button>
+        <button id="btn-connect-polar" disabled>Connect Polar H10</button>
+        <button id="btn-simulate-polar" disabled>Simulate Polar</button>
+        <button id="btn-start-camera" disabled>Start Camera</button>
+        <button id="btn-start-capture" disabled>Start Full Capture</button>
+      </div>
+      <p id="status">Waiting</p>
+    </section>
+
+    <section class="panel">
+      <h2 id="phase-title">Setup</h2>
+      <div id="phase-timer" class="timer">--</div>
+      <p id="phase-instructions">Create a session, connect Polar, and start the camera.</p>
+      <div class="progress-track"><div id="phase-progress"></div></div>
+    </section>
+
+    <section class="panel video-panel">
+      <h2>Camera Preview</h2>
+      <video id="video-layer" playsinline muted autoplay></video>
+    </section>
+
+    <section class="panel">
+      <h2>Events</h2>
+      <ol id="events-list"></ol>
+    </section>
+  </main>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

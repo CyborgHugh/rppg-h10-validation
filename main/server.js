@@ -1,28 +1,23 @@
 import http from 'node:http';
-import { createReadStream } from 'node:fs';
-import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { createSession, finalizeSession, readJsonBody } from './src/storage.js';
+import { readJsonBody } from '../src/http.js';
+import { json, serveSharedAlgorithm, serveStatic } from '../src/static-server.js';
+import { createSession, finalizeSession } from './src/storage.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const DATA_ROOT = path.join(__dirname, 'data');
+const SHARED_DIR = path.join(__dirname, '..', 'shared');
 const PORT = Number(process.env.PORT || 3000);
 
-const MIME = {
-  '.html': 'text/html; charset=utf-8',
-  '.js': 'text/javascript; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
-  '.json': 'application/json; charset=utf-8',
-  '.csv': 'text/csv; charset=utf-8',
-  '.svg': 'image/svg+xml'
-};
-
-export function createAppServer({ publicDir = PUBLIC_DIR, dataRoot = DATA_ROOT } = {}) {
+export function createAppServer({ publicDir = PUBLIC_DIR, dataRoot = DATA_ROOT, sharedDir = SHARED_DIR } = {}) {
   return http.createServer(async (req, res) => {
     try {
       const url = new URL(req.url, `http://${req.headers.host}`);
+      if (url.pathname.startsWith('/shared/')) {
+        return serveSharedAlgorithm(sharedDir, url.pathname, res);
+      }
       if (url.pathname === '/api/health') {
         return json(res, { ok: true });
       }
@@ -65,29 +60,4 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     console.log(`rPPG x Polar H10 validation app: http://localhost:${PORT}`);
     console.log(`Data directory: ${DATA_ROOT}`);
   });
-}
-
-async function serveStatic(publicDir, requestPath, res) {
-  const safePath = decodeURIComponent(requestPath).replace(/^\/+/, '') || 'index.html';
-  const fullPath = path.normalize(path.join(publicDir, safePath));
-  if (!fullPath.startsWith(publicDir)) {
-    return text(res, 'Forbidden', 403);
-  }
-  const fileStat = await stat(fullPath).catch(() => null);
-  if (!fileStat || !fileStat.isFile()) {
-    return text(res, 'Not found', 404);
-  }
-  const ext = path.extname(fullPath);
-  res.writeHead(200, { 'Content-Type': MIME[ext] || 'application/octet-stream' });
-  createReadStream(fullPath).pipe(res);
-}
-
-function json(res, payload, status = 200) {
-  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
-  res.end(`${JSON.stringify(payload)}\n`);
-}
-
-function text(res, payload, status = 200) {
-  res.writeHead(status, { 'Content-Type': 'text/plain; charset=utf-8' });
-  res.end(payload);
 }

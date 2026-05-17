@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Replay rPPG Capture</title>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main class="app-shell">
+    <header class="topbar">
+      <div>
+        <h1>Replay Capture</h1>
+        <p>Run the current shared rPPG algorithm on a saved raw capture session.</p>
+      </div>
+      <a href="/">Capture</a>
+    </header>
+
+    <section class="panel">
+      <label>Session ID <input id="session-id" placeholder="P001_..."></label>
+      <label>Existing sessions
+        <select id="session-list"></select>
+      </label>
+      <div class="button-row">
+        <button id="btn-load-sessions">List Sessions</button>
+        <button id="btn-load">Load</button>
+        <button id="btn-run" disabled>Run Replay</button>
+        <button id="btn-run-all-sessions">Run All Sessions</button>
+      </div>
+      <p id="status">Waiting</p>
+    </section>
+
+    <section class="panel video-panel">
+      <video id="video-layer" playsinline muted controls></video>
+      <canvas id="canvas-layer"></canvas>
+    </section>
+
+    <section class="panel">
+      <h2>Live HR Comparison</h2>
+      <canvas id="hr-chart" width="900" height="260"></canvas>
+      <div class="legend">
+        <span>Polar</span>
+        <span>CWT Raw</span>
+        <span>CWT Gated</span>
+        <span>LS</span>
+      </div>
+    </section>
+  </main>
+
+  <script type="module" src="/replay.js"></script>
+</body>
+</html>

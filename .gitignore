@@ -1,4 +1,7 @@
 data/
+main/data/
+simplified/data/
+capture/data/
 node_modules/
 *.log
 .DS_Store
